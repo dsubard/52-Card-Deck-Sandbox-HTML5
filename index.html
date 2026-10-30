@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Card Sandbox</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 14'%3E%3Crect width='10' height='14' rx='1.5' fill='%23fff'/%3E%3Ctext x='5' y='10' font-size='8' text-anchor='middle' fill='%23c8102e'%3E%E2%99%A5%3C/text%3E%3C/svg%3E">
+<style>
+  :root {
+    --felt: #1f6b3a;
+    --felt-dark: #154d29;
+    --red: #c8102e;
+    --black: #16181d;
+    --back: #1d3f8f;
+    --back-2: #2a56b8;
+    --cw: 86px;           /* card width, set from JS */
+    --ch: calc(var(--cw) * 1.4);
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: radial-gradient(ellipse at 50% 40%, var(--felt) 0%, var(--felt-dark) 100%);
+    background-color: var(--felt);
+    font-family: Georgia, "Times New Roman", serif;
+    -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent;
+    touch-action: none;
+  }
+  #table { position: fixed; inset: 0; }
+
+  .card {
+    position: absolute; left: 0; top: 0; width: var(--cw); height: var(--ch);
+    perspective: calc(var(--cw) * 8);
+    will-change: transform;
+    cursor: grab;
+  }
+  .card.dragging { cursor: grabbing; }
+  .inner {
+    position: absolute; inset: 0; transform-style: preserve-3d;
+    transition: transform .38s cubic-bezier(.3, .7, .3, 1);
+    border-radius: calc(var(--cw) * .07);
+    box-shadow: 0 1px 2px rgba(0,0,0,.35), 0 2px 6px rgba(0,0,0,.18);
+    transition-property: transform, box-shadow;
+  }
+  .card.up .inner { transform: rotateY(180deg); }
+  .card.dragging .inner { box-shadow: 0 10px 22px rgba(0,0,0,.38), 0 3px 8px rgba(0,0,0,.25); }
+  .face {
+    position: absolute; inset: 0; border-radius: inherit; overflow: hidden;
+    backface-visibility: hidden; -webkit-backface-visibility: hidden;
+  }
+  .back {
+    background:
+      repeating-linear-gradient(45deg, rgba(255,255,255,.09) 0 3px, transparent 3px 9px),
+      repeating-linear-gradient(-45deg, rgba(255,255,255,.09) 0 3px, transparent 3px 9px),
+      linear-gradient(160deg, var(--back-2), var(--back));
+    border: calc(var(--cw) * .055) solid #f4f1ea;
+  }
+  .back::after {
+    content: ""; position: absolute; inset: calc(var(--cw) * .05);
+    border: 1px solid rgba(255,255,255,.35); border-radius: calc(var(--cw) * .03);
+  }
+  .front {
+    transform: rotateY(180deg);
+    background: #fbfaf6; border: 1px solid #d9d5c8;
+    color: var(--black); font-size: var(--cw);
+  }
+  .front.red { color: var(--red); }
+  .corner {
+    position: absolute; display: flex; flex-direction: column; align-items: center;
+    line-height: .95; width: .2em;
+  }
+  .corner .r { font-size: .2em; font-weight: 700; letter-spacing: -.04em; }
+  .corner .s { font-size: .17em; }
+  .corner.tl { left: .04em; top: .05em; }
+  .corner.br { right: .04em; bottom: .05em; transform: rotate(180deg); }
+  .pip { position: absolute; font-size: .26em; line-height: 1; transform: translate(-50%, -50%); }
+  .pip.flip { transform: translate(-50%, -50%) rotate(180deg); }
+  .ace { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); font-size: .62em; line-height: 1; }
+  .court {
+    position: absolute; left: .2em; right: .2em; top: .24em; bottom: .24em;
+    border: 1px solid currentColor; border-radius: .03em; opacity: .9;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: linear-gradient(180deg, rgba(0,0,0,.035), rgba(0,0,0,0));
+  }
+  .court .big { font-size: .5em; font-weight: 700; line-height: 1; }
+  .court .suit { font-size: .3em; line-height: 1; margin-top: .05em; }
+
+  #bar {
+    position: fixed; right: 12px; bottom: 12px; display: flex; gap: 8px; align-items: center;
+    font: 13px/1.3 system-ui, -apple-system, "Segoe UI", sans-serif; color: rgba(255,255,255,.75);
+    z-index: 100000;
+  }
+  #bar button {
+    font: 600 13px system-ui, -apple-system, "Segoe UI", sans-serif; color: #fff;
+    background: rgba(0,0,0,.28); border: 1px solid rgba(255,255,255,.25); border-radius: 8px;
+    padding: 7px 12px; cursor: pointer;
+  }
+  #bar button:hover { background: rgba(0,0,0,.4); }
+  #bar button:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+  #hint { padding: 0 4px; }
+  @media (max-width: 560px) { #hint { display: none; } }
+</style>
+</head>
+<body>
+<div id="table"></div>
+<div id="bar">
+  <span id="hint">Left-drag to move · Right-click to flip</span>
+  <button type="button" id="reset">New shuffled deck</button>
+</div>
+<script>
+(() => {
+  'use strict';
+  const table = document.getElementById('table');
+  const hint = document.getElementById('hint');
+  const SUITS = [
+    { s: '♠︎', red: false }, { s: '♥︎', red: true },
+    { s: '♦︎', red: true },  { s: '♣︎', red: false },
+  ];
+  const RANKS = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
+  // pip layouts as [x%, y%]
+  const L = 28, R = 72, C = 50;
+  const PIPS = {
+    2: [[C,18],[C,82]],
+    3: [[C,18],[C,50],[C,82]],
+    4: [[L,18],[R,18],[L,82],[R,82]],
+    5: [[L,18],[R,18],[C,50],[L,82],[R,82]],
+    6: [[L,18],[R,18],[L,50],[R,50],[L,82],[R,82]],
+    7: [[L,18],[R,18],[C,34],[L,50],[R,50],[L,82],[R,82]],
+    8: [[L,18],[R,18],[C,34],[L,50],[R,50],[C,66],[L,82],[R,82]],
+    9: [[L,18],[R,18],[L,39],[R,39],[C,50],[L,61],[R,61],[L,82],[R,82]],
+    10: [[L,18],[R,18],[C,29],[L,39],[R,39],[L,61],[R,61],[C,71],[L,82],[R,82]],
+  };
+
+  let cw = 86, ch = 120.4, z = 1;
+  const cards = [];
+
+  function sizeCards() {
+    cw = Math.round(Math.max(52, Math.min(96, window.innerWidth * 0.11, window.innerHeight * 0.13)));
+    ch = cw * 1.4;
+    document.documentElement.style.setProperty('--cw', cw + 'px');
+  }
+
+  function faceHTML(rank, suit) {
+    const corner = '<span class="r">' + rank + '</span><span class="s">' + suit.s + '</span>';
+    let mid = '';
+    if (rank === 'A') mid = '<div class="ace">' + suit.s + '</div>';
+    else if (rank === 'J' || rank === 'Q' || rank === 'K') mid = '<div class="court"><span class="big">' + rank + '</span><span class="suit">' + suit.s + '</span></div>';
+    else for (const [x, y] of PIPS[rank]) mid += '<span class="pip' + (y > 50 ? ' flip' : '') + '" style="left:' + x + '%;top:' + y + '%">' + suit.s + '</span>';
+    return '<div class="corner tl">' + corner + '</div>' + mid + '<div class="corner br">' + corner + '</div>';
+  }
+
+  function makeCard(rank, suit) {
+    const el = document.createElement('div');
+    el.className = 'card';
+    el.innerHTML = '<div class="inner"><div class="face back"></div><div class="face front' + (suit.red ? ' red' : '') + '">' + faceHTML(rank, suit) + '</div></div>';
+    const card = { el, inner: el.firstChild, x: 0, y: 0, tilt: 0, up: false, name: rank + suit.s };
+    el._card = card;
+    table.appendChild(el);
+    return card;
+  }
+
+  function place(c) {
+    c.el.style.transform = 'translate3d(' + c.x.toFixed(2) + 'px,' + c.y.toFixed(2) + 'px,0) rotate(' + c.tilt.toFixed(2) + 'deg)';
+  }
+  function toTop(c) { c.el.style.zIndex = ++z; }
+  function setUp(c, up) { c.up = up; c.el.classList.toggle('up', up); }
+
+  const DECK_X = 24, DECK_Y = 24;
+  function newDeck() {
+    table.textContent = '';
+    cards.length = 0;
+    z = 1;
+    for (const suit of SUITS) for (const rank of RANKS) cards.push(makeCard(rank, suit));
+    for (let i = cards.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [cards[i], cards[j]] = [cards[j], cards[i]]; }
+    for (const c of cards) { c.x = DECK_X; c.y = DECK_Y; c.tilt = 0; setUp(c, false); toTop(c); place(c); }
+  }
+
+  function clampCard(c) {
+    c.x = Math.max(-cw * 0.5, Math.min(window.innerWidth - cw * 0.5, c.x));
+    c.y = Math.max(-ch * 0.5, Math.min(window.innerHeight - ch * 0.5, c.y));
+  }
+
+  // ---------- dragging (with a little tilt that follows the motion) ----------
+  let drag = null;
+  function cardAt(e) {
+    const el = e.target.closest && e.target.closest('.card');
+    return el ? el._card : null;
+  }
+
+  table.addEventListener('pointerdown', (e) => {
+    const c = cardAt(e);
+    if (!c) return;
+    e.preventDefault();
+    if (e.button === 2) { setUp(c, !c.up); return; }
+    if (e.button !== 0) return;
+    toTop(c);
+    drag = { c, id: e.pointerId, dx: e.clientX - c.x, dy: e.clientY - c.y, sx: e.clientX, sy: e.clientY, t: performance.now(), moved: false, lastX: e.clientX, vx: 0, touch: e.pointerType === 'touch' };
+    c.el.classList.add('dragging');
+    c.el.setPointerCapture(e.pointerId);
+    if (hint) hint.style.opacity = '0.5';
+  });
+  window.addEventListener('pointermove', (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    const c = drag.c;
+    if (!drag.moved && Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) > 5) drag.moved = true;
+    drag.vx = e.clientX - drag.lastX;
+    drag.lastX = e.clientX;
+    c.x = e.clientX - drag.dx;
+    c.y = e.clientY - drag.dy;
+    clampCard(c);
+  });
+  function endDrag(e) {
+    if (!drag || e.pointerId !== drag.id) return;
+    const c = drag.c;
+    c.el.classList.remove('dragging');
+    // on touch screens a quick tap (no drag) flips the card
+    if (drag.touch && !drag.moved && performance.now() - drag.t < 350) setUp(c, !c.up);
+    drag = null;
+  }
+  window.addEventListener('pointerup', endDrag);
+  window.addEventListener('pointercancel', endDrag);
+  window.addEventListener('contextmenu', (e) => e.preventDefault());
+
+  // render loop: position the dragged card every frame and ease its tilt
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(now - last, 50); last = now;
+    const k = 1 - Math.exp(-dt / 90);
+    for (const c of cards) {
+      const target = drag && drag.c === c ? Math.max(-12, Math.min(12, drag.vx * 0.6)) : 0;
+      if (drag && drag.c === c) drag.vx *= 1 - (1 - Math.exp(-dt / 60));
+      if (c.tilt !== target || (drag && drag.c === c)) {
+        c.tilt += (target - c.tilt) * k;
+        if (Math.abs(c.tilt - target) < 0.01) c.tilt = target;
+        place(c);
+      }
+    }
+    requestAnimationFrame(frame);
+  }
+
+  document.getElementById('reset').addEventListener('click', newDeck);
+  window.addEventListener('resize', () => { sizeCards(); for (const c of cards) { clampCard(c); place(c); } });
+
+  sizeCards();
+  newDeck();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
